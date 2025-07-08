@@ -88,8 +88,10 @@ func (r *H264StreamReader) ReadNALUnit() (*H264NALUnit, error) {
 
 		log.Printf("Found start code at position %d, length %d", startCodePos, startCodeLen)
 
-		// Skip any data before the start code and the start code itself
-		r.buffer = r.buffer[startCodePos+startCodeLen:]
+		// Skip any data before the start code but keep the start code for now
+		if startCodePos > 0 {
+			r.buffer = r.buffer[startCodePos:]
+		}
 
 		// Find the next start code to determine NAL unit length
 		nextStartCodePos := r.findNextStartCode()
@@ -113,9 +115,9 @@ func (r *H264StreamReader) ReadNALUnit() (*H264NALUnit, error) {
 
 		log.Printf("Next start code found at position %d, extracting NAL unit", nextStartCodePos)
 
-		// Extract NAL unit
-		nalData := make([]byte, nextStartCodePos)
-		copy(nalData, r.buffer[:nextStartCodePos])
+		// Extract NAL unit (skip the start code, take data up to next start code)
+		nalData := make([]byte, nextStartCodePos-startCodeLen)
+		copy(nalData, r.buffer[startCodeLen:nextStartCodePos])
 		r.buffer = r.buffer[nextStartCodePos:]
 
 		if len(nalData) == 0 {
@@ -161,16 +163,20 @@ func (r *H264StreamReader) findStartCode() (int, int) {
 
 // findNextStartCode finds the position of the next start code
 func (r *H264StreamReader) findNextStartCode() int {
+	log.Printf("Searching for next start code in buffer of size %d", len(r.buffer))
 	for i := 1; i < len(r.buffer)-2; i++ {
 		// Check for 4-byte start code
 		if i < len(r.buffer)-3 && bytes.Equal(r.buffer[i:i+4], []byte{0x00, 0x00, 0x00, 0x01}) {
+			log.Printf("Found 4-byte next start code at position %d", i)
 			return i
 		}
 		// Check for 3-byte start code
 		if bytes.Equal(r.buffer[i:i+3], []byte{0x00, 0x00, 0x01}) {
+			log.Printf("Found 3-byte next start code at position %d", i)
 			return i
 		}
 	}
+	log.Printf("No next start code found in buffer")
 	return -1
 }
 
