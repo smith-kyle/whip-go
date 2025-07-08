@@ -59,8 +59,12 @@ func (r *H264StreamReader) ReadNALUnit() (*H264NALUnit, error) {
 			tmp := make([]byte, 4096)
 			n, err := r.reader.Read(tmp)
 			if err != nil {
+				if err.Error() != "EOF" {
+					log.Printf("Error reading from H.264 stream: %v", err)
+				}
 				return nil, err
 			}
+			log.Printf("Read %d bytes from H.264 stream, buffer now %d bytes", n, len(r.buffer)+n)
 			r.buffer = append(r.buffer, tmp[:n]...)
 		}
 
@@ -68,14 +72,21 @@ func (r *H264StreamReader) ReadNALUnit() (*H264NALUnit, error) {
 		startCodeLen := r.findStartCode()
 		if startCodeLen == 0 {
 			// No start code found, read more data
+			log.Printf("No start code found in buffer (size=%d), reading more data", len(r.buffer))
 			tmp := make([]byte, 4096)
 			n, err := r.reader.Read(tmp)
 			if err != nil {
+				if err.Error() != "EOF" {
+					log.Printf("Error reading more data: %v", err)
+				}
 				return nil, err
 			}
+			log.Printf("Read additional %d bytes for start code search", n)
 			r.buffer = append(r.buffer, tmp[:n]...)
 			continue
 		}
+
+		log.Printf("Found start code of length %d", startCodeLen)
 
 		// Skip the start code
 		r.buffer = r.buffer[startCodeLen:]
@@ -103,12 +114,15 @@ func (r *H264StreamReader) ReadNALUnit() (*H264NALUnit, error) {
 		r.buffer = r.buffer[nextStartCodePos:]
 
 		if len(nalData) == 0 {
+			log.Printf("Empty NAL unit, continuing")
 			continue
 		}
 
 		// Parse NAL unit header
 		nalType := nalData[0] & 0x1F
 		isKeyFrame := nalType == NALUnitTypeIDR || nalType == NALUnitTypeSPS || nalType == NALUnitTypePPS
+
+		log.Printf("Extracted NAL unit: type=%d, size=%d bytes", nalType, len(nalData))
 
 		return &H264NALUnit{
 			Type:       nalType,
@@ -217,8 +231,24 @@ func (track *H264StreamTrack) NewRTPReader(codecName string, ssrc uint32, mtu in
 			// Calculate timestamp (90kHz clock)
 			timestamp := uint32(nalUnit.Timestamp.UnixNano() / 1000000 * 90 / 1000)
 
-			log.Printf("H.264 NAL unit: type=%d, size=%d bytes, keyframe=%v",
-				nalUnit.Type, len(nalUnit.Data), nalUnit.IsKeyFrame)
+			nalTypeString := "unknown"
+			switch nalUnit.Type {
+			case 1:
+				nalTypeString = "slice"
+			case 5:
+				nalTypeString = "IDR"
+			case 6:
+				nalTypeString = "SEI"
+			case 7:
+				nalTypeString = "SPS"
+			case 8:
+				nalTypeString = "PPS"
+			case 9:
+				nalTypeString = "AUD"
+			}
+
+			log.Printf("H.264 NAL unit: type=%d (%s), size=%d bytes, keyframe=%v",
+				nalUnit.Type, nalTypeString, len(nalUnit.Data), nalUnit.IsKeyFrame)
 
 			// Packetize NAL unit
 			packets := packetizer.Packetize(nalUnit.Data, timestamp)
