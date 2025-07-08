@@ -34,16 +34,22 @@ type H264NALUnit struct {
 
 // H.264 stream reader for parsing NAL units
 type H264StreamReader struct {
-	reader io.ReadCloser
-	buffer []byte
-	mu     sync.Mutex
+	reader    io.ReadCloser
+	buffer    []byte
+	mu        sync.Mutex
+	startTime time.Time
+	spsData   []byte
+	ppsData   []byte
+	spsSent   bool
+	ppsSent   bool
 }
 
 // NewH264StreamReader creates a new H.264 stream reader
 func NewH264StreamReader(reader io.ReadCloser) *H264StreamReader {
 	return &H264StreamReader{
-		reader: reader,
-		buffer: make([]byte, 0, 1024*1024), // 1MB buffer
+		reader:    reader,
+		buffer:    make([]byte, 0, 1024*1024), // 1MB buffer
+		startTime: time.Now(),
 	}
 }
 
@@ -127,9 +133,20 @@ func (r *H264StreamReader) ReadNALUnit() (*H264NALUnit, error) {
 
 		// Parse NAL unit header
 		nalType := nalData[0] & 0x1F
-		isKeyFrame := nalType == NALUnitTypeIDR || nalType == NALUnitTypeSPS || nalType == NALUnitTypePPS
+		isKeyFrame := nalType == NALUnitTypeIDR
 
 		log.Printf("Extracted NAL unit: type=%d, size=%d bytes", nalType, len(nalData))
+
+		// Handle SPS/PPS parameter sets
+		if nalType == NALUnitTypeSPS {
+			r.spsData = make([]byte, len(nalData))
+			copy(r.spsData, nalData)
+			log.Printf("Stored SPS data: %d bytes", len(r.spsData))
+		} else if nalType == NALUnitTypePPS {
+			r.ppsData = make([]byte, len(nalData))
+			copy(r.ppsData, nalData)
+			log.Printf("Stored PPS data: %d bytes", len(r.ppsData))
+		}
 
 		return &H264NALUnit{
 			Type:       nalType,
@@ -138,6 +155,48 @@ func (r *H264StreamReader) ReadNALUnit() (*H264NALUnit, error) {
 			IsKeyFrame: isKeyFrame,
 		}, nil
 	}
+}
+
+// GetStoredSPS returns the stored SPS data
+func (r *H264StreamReader) GetStoredSPS() []byte {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.spsData
+}
+
+// GetStoredPPS returns the stored PPS data
+func (r *H264StreamReader) GetStoredPPS() []byte {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.ppsData
+}
+
+// MarkSPSSent marks SPS as sent
+func (r *H264StreamReader) MarkSPSSent() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.spsSent = true
+}
+
+// MarkPPSSent marks PPS as sent
+func (r *H264StreamReader) MarkPPSSent() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.ppsSent = true
+}
+
+// ShouldSendSPS checks if SPS should be sent
+func (r *H264StreamReader) ShouldSendSPS() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.spsData) > 0 && !r.spsSent
+}
+
+// ShouldSendPPS checks if PPS should be sent
+func (r *H264StreamReader) ShouldSendPPS() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.ppsData) > 0 && !r.ppsSent
 }
 
 // findStartCode finds the first start code in the buffer and returns its position and length
@@ -188,10 +247,12 @@ func (r *H264StreamReader) Close() error {
 // H.264 stream track implementation
 type H264StreamTrack struct {
 	*baseTrack
-	reader      *H264StreamReader
-	clockRate   uint32
-	payloadType uint8
-	ssrc        uint32
+	reader           *H264StreamReader
+	clockRate        uint32
+	payloadType      uint8
+	ssrc             uint32
+	keyFrameInterval time.Duration
+	lastKeyFrameTime time.Time
 }
 
 // NewH264StreamTrack creates a new H.264 stream track
@@ -199,10 +260,11 @@ func NewH264StreamTrack(reader io.ReadCloser, selector *CodecSelector) mediadevi
 	base := newBaseTrack(mediadevices.VideoInput, selector)
 
 	return &H264StreamTrack{
-		baseTrack:   base,
-		reader:      NewH264StreamReader(reader),
-		clockRate:   90000, // H.264 standard clock rate
-		payloadType: 96,    // Dynamic payload type for H.264
+		baseTrack:        base,
+		reader:           NewH264StreamReader(reader),
+		clockRate:        90000,           // H.264 standard clock rate
+		payloadType:      96,              // Dynamic payload type for H.264
+		keyFrameInterval: 2 * time.Second, // Send SPS/PPS every 2 seconds
 	}
 }
 
@@ -232,6 +294,30 @@ func (track *H264StreamTrack) NewRTPReader(codecName string, ssrc uint32, mtu in
 
 	return &rtpReadCloserImpl{
 		readFn: func() ([]*rtp.Packet, func(), error) {
+			// Check if we need to send SPS/PPS first
+			if track.reader.ShouldSendSPS() {
+				spsData := track.reader.GetStoredSPS()
+				if len(spsData) > 0 {
+					log.Printf("Sending SPS parameter set: %d bytes", len(spsData))
+					timestamp := track.calculateTimestamp(time.Now())
+					packets := packetizer.Packetize(spsData, timestamp)
+					track.reader.MarkSPSSent()
+					return packets, func() {}, nil
+				}
+			}
+
+			if track.reader.ShouldSendPPS() {
+				ppsData := track.reader.GetStoredPPS()
+				if len(ppsData) > 0 {
+					log.Printf("Sending PPS parameter set: %d bytes", len(ppsData))
+					timestamp := track.calculateTimestamp(time.Now())
+					packets := packetizer.Packetize(ppsData, timestamp)
+					track.reader.MarkPPSSent()
+					return packets, func() {}, nil
+				}
+			}
+
+			// Read next NAL unit
 			nalUnit, err := track.reader.ReadNALUnit()
 			if err != nil {
 				if err.Error() != "EOF" {
@@ -241,8 +327,8 @@ func (track *H264StreamTrack) NewRTPReader(codecName string, ssrc uint32, mtu in
 				return nil, func() {}, err
 			}
 
-			// Calculate timestamp (90kHz clock)
-			timestamp := uint32(nalUnit.Timestamp.UnixNano() / 1000000 * 90 / 1000)
+			// Calculate proper RTP timestamp (relative to stream start)
+			timestamp := track.calculateTimestamp(nalUnit.Timestamp)
 
 			nalTypeString := "unknown"
 			switch nalUnit.Type {
@@ -260,8 +346,17 @@ func (track *H264StreamTrack) NewRTPReader(codecName string, ssrc uint32, mtu in
 				nalTypeString = "AUD"
 			}
 
-			log.Printf("H.264 NAL unit: type=%d (%s), size=%d bytes, keyframe=%v",
-				nalUnit.Type, nalTypeString, len(nalUnit.Data), nalUnit.IsKeyFrame)
+			log.Printf("H.264 NAL unit: type=%d (%s), size=%d bytes, keyframe=%v, timestamp=%d",
+				nalUnit.Type, nalTypeString, len(nalUnit.Data), nalUnit.IsKeyFrame, timestamp)
+
+			// Re-send SPS/PPS periodically for keyframes
+			if nalUnit.IsKeyFrame && time.Since(track.lastKeyFrameTime) > track.keyFrameInterval {
+				track.lastKeyFrameTime = time.Now()
+				// Reset flags to re-send SPS/PPS
+				track.reader.spsSent = false
+				track.reader.ppsSent = false
+				log.Printf("Keyframe detected, will re-send SPS/PPS on next reads")
+			}
 
 			// Packetize NAL unit
 			packets := packetizer.Packetize(nalUnit.Data, timestamp)
@@ -277,6 +372,19 @@ func (track *H264StreamTrack) NewRTPReader(codecName string, ssrc uint32, mtu in
 			return &H264StreamController{track: track}
 		},
 	}, nil
+}
+
+// calculateTimestamp calculates RTP timestamp from absolute time
+func (track *H264StreamTrack) calculateTimestamp(t time.Time) uint32 {
+	// Calculate elapsed time since start of stream
+	elapsed := t.Sub(track.reader.startTime)
+
+	// Convert to 90kHz clock ticks (H.264 standard)
+	// elapsed.Nanoseconds() / 1000000000 gives seconds
+	// multiply by 90000 to get 90kHz ticks
+	timestampTicks := uint32(elapsed.Nanoseconds() * 90 / 1000000000)
+
+	return timestampTicks
 }
 
 // NewEncodedReader creates an encoded reader (not implemented for H.264 stream)
