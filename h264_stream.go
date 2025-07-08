@@ -155,7 +155,7 @@ func (r *H264StreamReader) ReadNALUnit() (*H264NALUnit, error) {
 
 				log.Printf("*** STORED SPS DATA: %d bytes, spsSent=%v ***", len(r.spsData), r.spsSent)
 				log.Printf("*** SPS PROFILE INFO: profile_idc=0x%02x, constraints=0x%02x, level_idc=0x%02x ***", profileIdc, constraintFlags, levelIdc)
-				log.Printf("*** ACTUAL PROFILE-LEVEL-ID: %s (we advertise 640028) ***", profileLevelId)
+				log.Printf("*** ACTUAL PROFILE-LEVEL-ID: %s (we advertise 42e01f) ***", profileLevelId)
 
 				// Decode profile type
 				profileName := "Unknown"

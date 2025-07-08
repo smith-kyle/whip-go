@@ -147,7 +147,7 @@ func H264PassthroughCodec() webrtc.RTPCodecParameters {
 			MimeType:    "video/H264",
 			ClockRate:   90000,
 			Channels:    0,
-			SDPFmtpLine: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=640028",
+			SDPFmtpLine: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f",
 		},
 		PayloadType: 96,
 	}
