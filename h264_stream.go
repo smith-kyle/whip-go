@@ -69,8 +69,8 @@ func (r *H264StreamReader) ReadNALUnit() (*H264NALUnit, error) {
 		}
 
 		// Find start code
-		startCodeLen := r.findStartCode()
-		if startCodeLen == 0 {
+		startCodePos, startCodeLen := r.findStartCode()
+		if startCodePos == -1 {
 			// No start code found, read more data
 			log.Printf("No start code found in buffer (size=%d), reading more data", len(r.buffer))
 			tmp := make([]byte, 4096)
@@ -86,10 +86,10 @@ func (r *H264StreamReader) ReadNALUnit() (*H264NALUnit, error) {
 			continue
 		}
 
-		log.Printf("Found start code of length %d", startCodeLen)
+		log.Printf("Found start code at position %d, length %d", startCodePos, startCodeLen)
 
-		// Skip the start code
-		r.buffer = r.buffer[startCodeLen:]
+		// Skip any data before the start code and the start code itself
+		r.buffer = r.buffer[startCodePos+startCodeLen:]
 
 		// Find the next start code to determine NAL unit length
 		nextStartCodePos := r.findNextStartCode()
@@ -133,23 +133,25 @@ func (r *H264StreamReader) ReadNALUnit() (*H264NALUnit, error) {
 	}
 }
 
-// findStartCode finds the start code at the beginning of the buffer
-func (r *H264StreamReader) findStartCode() int {
+// findStartCode finds the first start code in the buffer and returns its position and length
+func (r *H264StreamReader) findStartCode() (int, int) {
 	if len(r.buffer) < 3 {
-		return 0
+		return -1, 0
 	}
 
-	// Check for 4-byte start code (0x00000001)
-	if len(r.buffer) >= 4 && bytes.Equal(r.buffer[:4], []byte{0x00, 0x00, 0x00, 0x01}) {
-		return 4
+	// Search for start code throughout the buffer
+	for i := 0; i <= len(r.buffer)-3; i++ {
+		// Check for 4-byte start code (0x00000001)
+		if i <= len(r.buffer)-4 && bytes.Equal(r.buffer[i:i+4], []byte{0x00, 0x00, 0x00, 0x01}) {
+			return i, 4
+		}
+		// Check for 3-byte start code (0x000001)
+		if bytes.Equal(r.buffer[i:i+3], []byte{0x00, 0x00, 0x01}) {
+			return i, 3
+		}
 	}
 
-	// Check for 3-byte start code (0x000001)
-	if bytes.Equal(r.buffer[:3], []byte{0x00, 0x00, 0x01}) {
-		return 3
-	}
-
-	return 0
+	return -1, 0
 }
 
 // findNextStartCode finds the position of the next start code
