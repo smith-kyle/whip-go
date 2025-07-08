@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"sync"
@@ -142,7 +143,36 @@ func (r *H264StreamReader) ReadNALUnit() (*H264NALUnit, error) {
 			r.spsData = make([]byte, len(nalData))
 			copy(r.spsData, nalData)
 			r.spsSent = false // Reset flag so it gets sent
-			log.Printf("*** STORED SPS DATA: %d bytes, spsSent=%v ***", len(r.spsData), r.spsSent)
+
+			// Parse SPS to get actual profile information
+			if len(nalData) >= 3 {
+				profileIdc := nalData[1]
+				constraintFlags := nalData[2]
+				levelIdc := nalData[3]
+
+				// Calculate profile-level-id as would appear in SDP
+				profileLevelId := fmt.Sprintf("%02x%02x%02x", profileIdc, constraintFlags, levelIdc)
+
+				log.Printf("*** STORED SPS DATA: %d bytes, spsSent=%v ***", len(r.spsData), r.spsSent)
+				log.Printf("*** SPS PROFILE INFO: profile_idc=0x%02x, constraints=0x%02x, level_idc=0x%02x ***", profileIdc, constraintFlags, levelIdc)
+				log.Printf("*** ACTUAL PROFILE-LEVEL-ID: %s (we advertise 42e01f) ***", profileLevelId)
+
+				// Decode profile type
+				profileName := "Unknown"
+				switch profileIdc {
+				case 66:
+					if (constraintFlags & 0xE0) == 0xE0 {
+						profileName = "Constrained Baseline"
+					} else {
+						profileName = "Baseline"
+					}
+				case 77:
+					profileName = "Main"
+				case 100:
+					profileName = "High"
+				}
+				log.Printf("*** DECODED PROFILE: %s ***", profileName)
+			}
 		} else if nalType == NALUnitTypePPS {
 			r.ppsData = make([]byte, len(nalData))
 			copy(r.ppsData, nalData)
