@@ -95,6 +95,7 @@ func (r *H264StreamReader) ReadNALUnit() (*H264NALUnit, error) {
 		nextStartCodePos := r.findNextStartCode()
 		if nextStartCodePos == -1 {
 			// No next start code found, read more data
+			log.Printf("No next start code found, buffer size=%d, reading more data", len(r.buffer))
 			tmp := make([]byte, 4096)
 			n, err := r.reader.Read(tmp)
 			if err != nil && err != io.EOF {
@@ -102,11 +103,15 @@ func (r *H264StreamReader) ReadNALUnit() (*H264NALUnit, error) {
 			}
 			if n > 0 {
 				r.buffer = append(r.buffer, tmp[:n]...)
+				log.Printf("Read %d more bytes, buffer now %d bytes, continuing search", n, len(r.buffer))
 				continue
 			}
 			// EOF reached, use remaining buffer
+			log.Printf("EOF reached, using remaining buffer size=%d", len(r.buffer))
 			nextStartCodePos = len(r.buffer)
 		}
+
+		log.Printf("Next start code found at position %d, extracting NAL unit", nextStartCodePos)
 
 		// Extract NAL unit
 		nalData := make([]byte, nextStartCodePos)
