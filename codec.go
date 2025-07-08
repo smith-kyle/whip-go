@@ -139,3 +139,40 @@ func (selector *CodecSelector) selectAudioCodec(reader audio.Reader, inputProp p
 
 	return selector.selectAudioCodecByNames(reader, inputProp, codecNames...)
 }
+
+// H264PassthroughCodec creates RTP codec parameters for H.264 passthrough
+func H264PassthroughCodec() webrtc.RTPCodecParameters {
+	return webrtc.RTPCodecParameters{
+		RTPCodecCapability: webrtc.RTPCodecCapability{
+			MimeType:    "video/H264",
+			ClockRate:   90000,
+			Channels:    0,
+			SDPFmtpLine: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f",
+		},
+		PayloadType: 96,
+	}
+}
+
+// WithH264PassthroughEncoder adds H.264 passthrough support to codec selector
+func WithH264PassthroughEncoder() CodecSelectorOption {
+	return func(selector *CodecSelector) {
+		// Add H.264 passthrough "encoder" (just codec parameters)
+		selector.videoEncoders = append(selector.videoEncoders, &H264PassthroughEncoder{})
+	}
+}
+
+// H264PassthroughEncoder implements codec.VideoEncoderBuilder for H.264 passthrough
+type H264PassthroughEncoder struct{}
+
+func (e *H264PassthroughEncoder) RTPCodec() *codec.RTPCodec {
+	return &codec.RTPCodec{
+		RTPCodecParameters: H264PassthroughCodec(),
+		Payloader:          &H264Payloader{},
+		Latency:            0, // No latency for passthrough
+	}
+}
+
+func (e *H264PassthroughEncoder) BuildVideoEncoder(r video.Reader, p prop.Media) (codec.ReadCloser, error) {
+	// This should not be called for H.264 passthrough mode
+	return nil, errors.New("BuildVideoEncoder should not be called for H.264 passthrough mode")
+}

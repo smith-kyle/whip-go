@@ -56,7 +56,32 @@ func (whip *WHIPClient) Publish(stream mediadevices.MediaStream, mediaEngine web
 	}
 
 	pc.OnICEConnectionStateChange(func(connectionState webrtc.ICEConnectionState) {
-		log.Printf("PeerConnection State has changed %s \n", connectionState.String())
+		log.Printf("ICE Connection State changed: %s", connectionState.String())
+
+		switch connectionState {
+		case webrtc.ICEConnectionStateFailed:
+			log.Printf("ICE connection failed - this usually means network connectivity issues")
+		case webrtc.ICEConnectionStateDisconnected:
+			log.Printf("ICE connection disconnected")
+		case webrtc.ICEConnectionStateConnected:
+			log.Printf("ICE connection established successfully!")
+		case webrtc.ICEConnectionStateCompleted:
+			log.Printf("ICE connection completed successfully!")
+		}
+	})
+
+	pc.OnConnectionStateChange(func(connectionState webrtc.PeerConnectionState) {
+		log.Printf("PeerConnection State changed: %s", connectionState.String())
+	})
+
+	pc.OnICECandidate(func(candidate *webrtc.ICECandidate) {
+		if candidate != nil {
+			log.Printf("ICE Candidate: %s %s %d", candidate.Protocol, candidate.Address, candidate.Port)
+		}
+	})
+
+	pc.OnICEGatheringStateChange(func(state webrtc.ICEGathererState) {
+		log.Printf("ICE Gathering State changed: %s", state.String())
 	})
 
 	offer, err := pc.CreateOffer(nil)
@@ -74,9 +99,17 @@ func (whip *WHIPClient) Publish(stream mediadevices.MediaStream, mediaEngine web
 	gatherComplete := webrtc.GatheringCompletePromise(pc)
 	<-gatherComplete
 
-	// log.Println(pc.LocalDescription().SDP)
+	localSDP := pc.LocalDescription().SDP
+	log.Printf("Local SDP Offer length: %d bytes", len(localSDP))
 
-	var sdp = []byte(pc.LocalDescription().SDP)
+	// Show first 200 characters of SDP for debugging
+	sdpPreview := localSDP
+	if len(sdpPreview) > 200 {
+		sdpPreview = sdpPreview[:200]
+	}
+	log.Printf("Local SDP Offer (first 200 chars): %s", sdpPreview)
+
+	var sdp = []byte(localSDP)
 	client := &http.Client{
 		Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{
@@ -92,6 +125,7 @@ func (whip *WHIPClient) Publish(stream mediadevices.MediaStream, mediaEngine web
 			return nil
 		},
 	}
+	log.Printf("Sending WHIP POST request to: %s", whip.endpoint)
 	req, err := http.NewRequest("POST", whip.endpoint, bytes.NewBuffer(sdp))
 	if err != nil {
 		log.Fatal("Unexpected error building http request. ", err)
@@ -100,20 +134,29 @@ func (whip *WHIPClient) Publish(stream mediadevices.MediaStream, mediaEngine web
 	req.Header.Add("Content-Type", "application/sdp")
 	if whip.token != "" {
 		req.Header.Add("Authorization", "Bearer "+whip.token)
+		log.Printf("Using authentication token")
 	}
 
+	log.Printf("Sending WHIP request with %d bytes of SDP", len(sdp))
 	resp, err := client.Do(req)
 	if err != nil {
 		log.Fatal("Failed http POST request. ", err)
 	}
 
+	log.Printf("WHIP server response: %d %s", resp.StatusCode, resp.Status)
+
 	defer resp.Body.Close()
 	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Fatal("Failed to read response body. ", err)
+	}
 
-	// log.Println(string(body))
+	log.Printf("Response body length: %d bytes", len(body))
+	log.Printf("Response headers: %v", resp.Header)
 
 	if resp.StatusCode != 201 {
-		log.Fatalf("Non Successful POST: %d", resp.StatusCode)
+		log.Printf("Response body: %s", string(body))
+		log.Fatalf("Non Successful POST: %d - %s", resp.StatusCode, string(body))
 	}
 
 	resourceUrl, err := url.Parse(resp.Header.Get("Location"))
@@ -125,15 +168,25 @@ func (whip *WHIPClient) Publish(stream mediadevices.MediaStream, mediaEngine web
 		log.Fatal("Failed to parse base url. ", err)
 	}
 	whip.resourceUrl = base.ResolveReference(resourceUrl).String()
+	log.Printf("Resource URL: %s", whip.resourceUrl)
 
 	answer := webrtc.SessionDescription{}
 	answer.Type = webrtc.SDPTypeAnswer
 	answer.SDP = string(body)
 
+	// Show first 200 characters of SDP answer for debugging
+	answerPreview := answer.SDP
+	if len(answerPreview) > 200 {
+		answerPreview = answerPreview[:200]
+	}
+	log.Printf("Remote SDP Answer (first 200 chars): %s", answerPreview)
+
+	log.Printf("Setting remote description...")
 	err = pc.SetRemoteDescription(answer)
 	if err != nil {
 		log.Fatal("PeerConnection could not set remote answer. ", err)
 	}
+	log.Printf("Remote description set successfully")
 }
 
 func (whip *WHIPClient) Close(skipTlsAuth bool) {
