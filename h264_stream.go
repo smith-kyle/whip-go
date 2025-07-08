@@ -137,15 +137,17 @@ func (r *H264StreamReader) ReadNALUnit() (*H264NALUnit, error) {
 
 		log.Printf("Extracted NAL unit: type=%d, size=%d bytes", nalType, len(nalData))
 
-		// Handle SPS/PPS parameter sets
+		// Handle SPS/PPS parameter sets - store them immediately
 		if nalType == NALUnitTypeSPS {
 			r.spsData = make([]byte, len(nalData))
 			copy(r.spsData, nalData)
-			log.Printf("Stored SPS data: %d bytes", len(r.spsData))
+			r.spsSent = false // Reset flag so it gets sent
+			log.Printf("*** STORED SPS DATA: %d bytes, spsSent=%v ***", len(r.spsData), r.spsSent)
 		} else if nalType == NALUnitTypePPS {
 			r.ppsData = make([]byte, len(nalData))
 			copy(r.ppsData, nalData)
-			log.Printf("Stored PPS data: %d bytes", len(r.ppsData))
+			r.ppsSent = false // Reset flag so it gets sent
+			log.Printf("*** STORED PPS DATA: %d bytes, ppsSent=%v ***", len(r.ppsData), r.ppsSent)
 		}
 
 		return &H264NALUnit{
@@ -189,14 +191,18 @@ func (r *H264StreamReader) MarkPPSSent() {
 func (r *H264StreamReader) ShouldSendSPS() bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return len(r.spsData) > 0 && !r.spsSent
+	shouldSend := len(r.spsData) > 0 && !r.spsSent
+	log.Printf("ShouldSendSPS: spsData length=%d, spsSent=%v, shouldSend=%v", len(r.spsData), r.spsSent, shouldSend)
+	return shouldSend
 }
 
 // ShouldSendPPS checks if PPS should be sent
 func (r *H264StreamReader) ShouldSendPPS() bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return len(r.ppsData) > 0 && !r.ppsSent
+	shouldSend := len(r.ppsData) > 0 && !r.ppsSent
+	log.Printf("ShouldSendPPS: ppsData length=%d, ppsSent=%v, shouldSend=%v", len(r.ppsData), r.ppsSent, shouldSend)
+	return shouldSend
 }
 
 // findStartCode finds the first start code in the buffer and returns its position and length
@@ -294,14 +300,17 @@ func (track *H264StreamTrack) NewRTPReader(codecName string, ssrc uint32, mtu in
 
 	return &rtpReadCloserImpl{
 		readFn: func() ([]*rtp.Packet, func(), error) {
+			log.Printf("RTP readFn called - checking for SPS/PPS parameter sets")
+
 			// Check if we need to send SPS/PPS first
 			if track.reader.ShouldSendSPS() {
 				spsData := track.reader.GetStoredSPS()
 				if len(spsData) > 0 {
-					log.Printf("Sending SPS parameter set: %d bytes", len(spsData))
+					log.Printf("*** SENDING SPS PARAMETER SET: %d bytes ***", len(spsData))
 					timestamp := track.calculateTimestamp(time.Now())
 					packets := packetizer.Packetize(spsData, timestamp)
 					track.reader.MarkSPSSent()
+					log.Printf("SPS sent with timestamp %d, %d packets generated", timestamp, len(packets))
 					return packets, func() {}, nil
 				}
 			}
@@ -309,14 +318,16 @@ func (track *H264StreamTrack) NewRTPReader(codecName string, ssrc uint32, mtu in
 			if track.reader.ShouldSendPPS() {
 				ppsData := track.reader.GetStoredPPS()
 				if len(ppsData) > 0 {
-					log.Printf("Sending PPS parameter set: %d bytes", len(ppsData))
+					log.Printf("*** SENDING PPS PARAMETER SET: %d bytes ***", len(ppsData))
 					timestamp := track.calculateTimestamp(time.Now())
 					packets := packetizer.Packetize(ppsData, timestamp)
 					track.reader.MarkPPSSent()
+					log.Printf("PPS sent with timestamp %d, %d packets generated", timestamp, len(packets))
 					return packets, func() {}, nil
 				}
 			}
 
+			log.Printf("No SPS/PPS to send, reading next NAL unit")
 			// Read next NAL unit
 			nalUnit, err := track.reader.ReadNALUnit()
 			if err != nil {
