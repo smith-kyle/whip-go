@@ -145,7 +145,7 @@ func (r *H264StreamReader) ReadNALUnit() (*H264NALUnit, error) {
 			r.spsSent = false // Reset flag so it gets sent
 
 			// Parse SPS to get actual profile information
-			if len(nalData) >= 3 {
+			if len(nalData) >= 4 {
 				profileIdc := nalData[1]
 				constraintFlags := nalData[2]
 				levelIdc := nalData[3]
