@@ -28,6 +28,7 @@ func main() {
 	iceServer := flag.String("i", "stun:stun.l.google.com:19302", "ice server")
 	token := flag.String("t", "", "publishing token")
 	videoCodec := flag.String("vc", "vp8", "video codec vp8|h264")
+	framerate := flag.Int("fps", 30, "framerate for h264-stream mode")
 	flag.Parse()
 
 	if len(flag.Args()) != 1 {
@@ -99,7 +100,7 @@ func main() {
 		)
 		codecSelector.Populate(&mediaEngine)
 
-		stream, err = GetH264StreamFromStdin(codecSelector)
+		stream, err = GetH264StreamFromStdin(codecSelector, *framerate)
 		if err != nil {
 			log.Fatal("Unexpected error capturing H.264 stream from stdin. ", err)
 		}

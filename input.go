@@ -93,9 +93,9 @@ func GetVideoTrack(name string, codecSelector *CodecSelector) (mediadevices.Trac
 	return track, nil
 }
 
-func GetH264StreamFromStdin(codecSelector *CodecSelector) (mediadevices.MediaStream, error) {
-	log.Printf("Initializing H.264 stream from stdin...")
-	track, err := GetH264VideoTrackFromStdin(codecSelector)
+func GetH264StreamFromStdin(codecSelector *CodecSelector, framerate int) (mediadevices.MediaStream, error) {
+	log.Printf("Initializing H.264 stream from stdin at %d fps...", framerate)
+	track, err := GetH264VideoTrackFromStdin(codecSelector, framerate)
 	if err != nil {
 		return nil, err
 	}
@@ -109,21 +109,23 @@ func GetH264StreamFromStdin(codecSelector *CodecSelector) (mediadevices.MediaStr
 	return stream, nil
 }
 
-func GetH264VideoTrackFromStdin(codecSelector *CodecSelector) (mediadevices.Track, error) {
-	track := newH264VideoTrackFromStdin(codecSelector)
+func GetH264VideoTrackFromStdin(codecSelector *CodecSelector, framerate int) (mediadevices.Track, error) {
+	track := newH264VideoTrackFromStdin(codecSelector, framerate)
 	return track, nil
 }
 
-func newH264VideoTrackFromStdin(codecSelector *CodecSelector) mediadevices.Track {
+func newH264VideoTrackFromStdin(codecSelector *CodecSelector, framerate int) mediadevices.Track {
 	base := newBaseTrack(mediadevices.VideoInput, codecSelector)
 	
 	return &H264VideoTrack{
 		baseTrack: base,
+		framerate: framerate,
 	}
 }
 
 type H264VideoTrack struct {
 	*baseTrack
+	framerate int
 }
 
 func (track *H264VideoTrack) Bind(ctx webrtc.TrackLocalContext) (webrtc.RTPCodecParameters, error) {
@@ -163,7 +165,7 @@ func (track *H264VideoTrack) NewRTPReader(codecName string, ssrc uint32, mtu int
 	
 	return &h264RTPReader{
 		packetizer: packetizer,
-		stdinReader: &h264StdinReader{},
+		stdinReader: &h264StdinReader{framerate: track.framerate},
 	}, nil
 }
 
@@ -172,6 +174,7 @@ type h264StdinReader struct {
 	buffer []byte
 	frameCount int
 	lastFrameTime time.Time
+	framerate int
 }
 
 func (r *h264StdinReader) Read() (mediadevices.EncodedBuffer, func(), error) {
@@ -232,9 +235,14 @@ func (r *h264StdinReader) Read() (mediadevices.EncodedBuffer, func(), error) {
 		r.lastFrameTime = now
 	}
 
+	// Calculate proper timing: 90kHz / framerate = samples per frame
+	// For 15fps: 90000/15 = 6000 samples per frame (66.67ms)
+	// For 30fps: 90000/30 = 3000 samples per frame (33.33ms)
+	samplesPerFrame := uint32(90000 / r.framerate)
+	
 	encoded := mediadevices.EncodedBuffer{
 		Data:    nalData,
-		Samples: 3000, // ~33ms at 90kHz for 30fps
+		Samples: samplesPerFrame,
 	}
 	
 	return encoded, func() {}, nil
