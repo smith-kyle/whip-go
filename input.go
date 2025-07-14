@@ -689,8 +689,15 @@ func newVideoSampler(clockRate uint32) samplerFunc {
 // to ensure consistent timing regardless of actual frame arrival times.
 func newFixedVideoSampler(clockRate uint32, framerate int) samplerFunc {
 	samplesPerFrame := uint32(clockRate) / uint32(framerate)
+	frameCount := 0
+	
+	log.Printf("Fixed video sampler: clockRate=%d, framerate=%d, samplesPerFrame=%d", clockRate, framerate, samplesPerFrame)
 	
 	return samplerFunc(func() uint32 {
+		frameCount++
+		if frameCount%30 == 1 {
+			log.Printf("Frame %d: returning %d samples (fixed timing)", frameCount, samplesPerFrame)
+		}
 		return samplesPerFrame
 	})
 }
