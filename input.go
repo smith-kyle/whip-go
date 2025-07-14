@@ -171,6 +171,7 @@ type h264StdinReader struct {
 	closed bool
 	buffer []byte
 	frameCount int
+	lastFrameTime time.Time
 }
 
 func (r *h264StdinReader) Read() (mediadevices.EncodedBuffer, func(), error) {
@@ -220,8 +221,15 @@ func (r *h264StdinReader) Read() (mediadevices.EncodedBuffer, func(), error) {
 	r.buffer = r.buffer[nalEnd:]
 
 	r.frameCount++
+	now := time.Now()
 	if r.frameCount%30 == 1 { // Log every 30 frames (~1 second at 30fps)
-		log.Printf("H.264 frame %d: %d bytes (buffer: %d bytes)", r.frameCount, len(nalData), len(r.buffer))
+		fps := 0.0
+		if r.frameCount > 1 && !r.lastFrameTime.IsZero() {
+			elapsed := now.Sub(r.lastFrameTime)
+			fps = 29.0 / elapsed.Seconds() // 29 frames processed in elapsed time
+		}
+		log.Printf("H.264 frame %d: %d bytes (buffer: %d bytes) - FPS: %.1f", r.frameCount, len(nalData), len(r.buffer), fps)
+		r.lastFrameTime = now
 	}
 
 	encoded := mediadevices.EncodedBuffer{
