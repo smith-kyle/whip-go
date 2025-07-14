@@ -124,8 +124,15 @@ func main() {
 
 	whip.Publish(stream, mediaEngine, iceServers, true)
 
-	fmt.Println("Press 'Enter' to finish...")
-	bufio.NewReader(os.Stdin).ReadBytes('\n')
+	if *video == "h264-stream" {
+		// For h264-stream, don't read from stdin (it's being used for video data)
+		// Wait for interrupt signal instead
+		fmt.Println("Streaming H.264 from stdin. Press Ctrl+C to stop...")
+		select {} // Block forever until interrupted
+	} else {
+		fmt.Println("Press 'Enter' to finish...")
+		bufio.NewReader(os.Stdin).ReadBytes('\n')
+	}
 
 	whip.Close(true)
 }
