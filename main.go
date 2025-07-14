@@ -8,9 +8,9 @@ import (
 	"os"
 
 	"github.com/pion/mediadevices"
-	// "github.com/pion/mediadevices/pkg/codec/opus"
-	// "github.com/pion/mediadevices/pkg/codec/vpx"
-	// "github.com/pion/mediadevices/pkg/codec/x264"
+	"github.com/pion/mediadevices/pkg/codec/opus"
+	"github.com/pion/mediadevices/pkg/codec/vpx"
+	"github.com/pion/mediadevices/pkg/codec/x264"
 	// _ "github.com/pion/mediadevices/pkg/driver/screen" // This is required to register screen adapter
 	"github.com/pion/mediadevices/pkg/prop"
 
