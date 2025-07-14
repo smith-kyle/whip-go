@@ -92,6 +92,134 @@ func GetVideoTrack(name string, codecSelector *CodecSelector) (mediadevices.Trac
 	return track, nil
 }
 
+func GetH264StreamFromStdin(codecSelector *CodecSelector) (mediadevices.MediaStream, error) {
+	track, err := GetH264VideoTrackFromStdin(codecSelector)
+	if err != nil {
+		return nil, err
+	}
+
+	stream, err := mediadevices.NewMediaStream(track)
+	if err != nil {
+		return nil, err
+	}
+
+	return stream, nil
+}
+
+func GetH264VideoTrackFromStdin(codecSelector *CodecSelector) (mediadevices.Track, error) {
+	track := newH264VideoTrackFromStdin(codecSelector)
+	return track, nil
+}
+
+func newH264VideoTrackFromStdin(codecSelector *CodecSelector) mediadevices.Track {
+	base := newBaseTrack(mediadevices.VideoInput, codecSelector)
+	
+	return &H264VideoTrack{
+		baseTrack: base,
+	}
+}
+
+type H264VideoTrack struct {
+	*baseTrack
+}
+
+func (track *H264VideoTrack) Bind(ctx webrtc.TrackLocalContext) (webrtc.RTPCodecParameters, error) {
+	return track.bind(ctx, track)
+}
+
+func (track *H264VideoTrack) Unbind(ctx webrtc.TrackLocalContext) error {
+	return track.unbind(ctx)
+}
+
+func (track *H264VideoTrack) NewEncodedReader(codecName string) (mediadevices.EncodedReadCloser, error) {
+	if !strings.Contains(strings.ToLower(codecName), "h264") {
+		return nil, errors.New("H264VideoTrack only supports H.264 codec")
+	}
+
+	return &h264StdinReader{}, nil
+}
+
+func (track *H264VideoTrack) NewEncodedIOReader(codecName string) (io.ReadCloser, error) {
+	return nil, errors.New("H264VideoTrack does not support NewEncodedIOReader")
+}
+
+func (track *H264VideoTrack) NewRTPReader(codecName string, ssrc uint32, mtu int) (mediadevices.RTPReadCloser, error) {
+	if !strings.Contains(strings.ToLower(codecName), "h264") {
+		return nil, errors.New("H264VideoTrack only supports H.264 codec")
+	}
+
+	h264Codec := codec.NewRTPH264Codec(90000)
+
+	packetizer := rtp.NewPacketizer(uint16(mtu), uint8(h264Codec.PayloadType), ssrc, h264Codec.Payloader, rtp.NewRandomSequencer(), h264Codec.ClockRate)
+	
+	return &h264RTPReader{
+		packetizer: packetizer,
+		stdinReader: &h264StdinReader{},
+	}, nil
+}
+
+type h264StdinReader struct {
+	closed bool
+}
+
+func (r *h264StdinReader) Read() (mediadevices.EncodedBuffer, func(), error) {
+	if r.closed {
+		return mediadevices.EncodedBuffer{}, func() {}, io.EOF
+	}
+
+	buffer := make([]byte, 4096)
+	n, err := os.Stdin.Read(buffer)
+	if err != nil {
+		r.closed = true
+		return mediadevices.EncodedBuffer{}, func() {}, err
+	}
+
+	if n == 0 {
+		r.closed = true
+		return mediadevices.EncodedBuffer{}, func() {}, io.EOF
+	}
+
+	encoded := mediadevices.EncodedBuffer{
+		Data:    buffer[:n],
+		Samples: 3000,
+	}
+	
+	return encoded, func() {}, nil
+}
+
+func (r *h264StdinReader) Close() error {
+	r.closed = true
+	return nil
+}
+
+func (r *h264StdinReader) Controller() codec.EncoderController {
+	return nil
+}
+
+type h264RTPReader struct {
+	packetizer  rtp.Packetizer
+	stdinReader *h264StdinReader
+}
+
+func (r *h264RTPReader) Read() ([]*rtp.Packet, func(), error) {
+	encoded, release, err := r.stdinReader.Read()
+	if err != nil {
+		return nil, func() {}, err
+	}
+	defer release()
+
+	pkts := r.packetizer.Packetize(encoded.Data, encoded.Samples)
+	return pkts, release, nil
+}
+
+func (r *h264RTPReader) Close() error {
+	return r.stdinReader.Close()
+}
+
+func (r *h264RTPReader) Controller() codec.EncoderController {
+	return nil
+}
+
 type baseTrack struct {
 	mediadevices.Source
 	err                   error

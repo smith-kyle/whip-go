@@ -8,10 +8,10 @@ import (
 	"os"
 
 	"github.com/pion/mediadevices"
-	"github.com/pion/mediadevices/pkg/codec/opus"
-	"github.com/pion/mediadevices/pkg/codec/vpx"
-	"github.com/pion/mediadevices/pkg/codec/x264"
-	_ "github.com/pion/mediadevices/pkg/driver/screen" // This is required to register screen adapter
+	// "github.com/pion/mediadevices/pkg/codec/opus"
+	// "github.com/pion/mediadevices/pkg/codec/vpx"
+	// "github.com/pion/mediadevices/pkg/codec/x264"
+	// _ "github.com/pion/mediadevices/pkg/driver/screen" // This is required to register screen adapter
 	"github.com/pion/mediadevices/pkg/prop"
 
 	//_ "github.com/pion/mediadevices/pkg/driver/camera"
@@ -22,7 +22,7 @@ import (
 )
 
 func main() {
-	video := flag.String("v", "screen", "input video device, can be \"screen\" or a named pipe")
+	video := flag.String("v", "screen", "input video device, can be \"screen\", \"h264-stream\", or a named pipe")
 	audio := flag.String("a", "", "input audio device, can be a named pipe")
 	videoBitrate := flag.Int("b", 1_000_000, "video bitrate in bits per second")
 	iceServer := flag.String("i", "stun:stun.l.google.com:19302", "ice server")
@@ -92,6 +92,16 @@ func main() {
 		})
 		if err != nil {
 			log.Fatal("Unexpected error capturing test source. ", err)
+		}
+	} else if *video == "h264-stream" {
+		codecSelector := NewCodecSelector(
+			WithVideoEncoders(&x264Params),
+		)
+		codecSelector.Populate(&mediaEngine)
+
+		stream, err = GetH264StreamFromStdin(codecSelector)
+		if err != nil {
+			log.Fatal("Unexpected error capturing H.264 stream from stdin. ", err)
 		}
 	} else {
 		codecSelector := NewCodecSelector(
