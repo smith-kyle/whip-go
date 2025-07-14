@@ -149,6 +149,10 @@ func (track *H264VideoTrack) NewRTPReader(codecName string, ssrc uint32, mtu int
 	}
 
 	h264Codec := codec.NewRTPH264Codec(90000)
+	// Set profile-level-id to 42c01f (constrained baseline, level 3.1)
+	h264Codec.RTPCodecParameters.Parameters = map[string]string{
+		"profile-level-id": "42c01f",
+	}
 
 	packetizer := rtp.NewPacketizer(uint16(mtu), uint8(h264Codec.PayloadType), ssrc, h264Codec.Payloader, rtp.NewRandomSequencer(), h264Codec.ClockRate)
 	
