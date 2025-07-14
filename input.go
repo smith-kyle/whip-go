@@ -167,7 +167,7 @@ func (track *H264VideoTrack) NewRTPReader(codecName string, ssrc uint32, mtu int
 		packetizer: packetizer,
 		stdinReader: &h264StdinReader{
 			framerate: track.framerate,
-			sampler:   newVideoSampler(h264Codec.ClockRate),
+			sampler:   newFixedVideoSampler(h264Codec.ClockRate, track.framerate),
 		},
 	}, nil
 }
@@ -682,6 +682,16 @@ func newVideoSampler(clockRate uint32) samplerFunc {
 		samples := uint32(math.Round(clockRateFloat * duration))
 		lastTimestamp = now
 		return samples
+	})
+}
+
+// newFixedVideoSampler creates a video sampler that uses a fixed frame rate
+// to ensure consistent timing regardless of actual frame arrival times.
+func newFixedVideoSampler(clockRate uint32, framerate int) samplerFunc {
+	samplesPerFrame := uint32(clockRate) / uint32(framerate)
+	
+	return samplerFunc(func() uint32 {
+		return samplesPerFrame
 	})
 }
 
