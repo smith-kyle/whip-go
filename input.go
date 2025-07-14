@@ -93,6 +93,7 @@ func GetVideoTrack(name string, codecSelector *CodecSelector) (mediadevices.Trac
 }
 
 func GetH264StreamFromStdin(codecSelector *CodecSelector) (mediadevices.MediaStream, error) {
+	log.Printf("Initializing H.264 stream from stdin...")
 	track, err := GetH264VideoTrackFromStdin(codecSelector)
 	if err != nil {
 		return nil, err
@@ -103,6 +104,7 @@ func GetH264StreamFromStdin(codecSelector *CodecSelector) (mediadevices.MediaStr
 		return nil, err
 	}
 
+	log.Printf("H.264 stream initialized successfully")
 	return stream, nil
 }
 
@@ -166,6 +168,8 @@ func (track *H264VideoTrack) NewRTPReader(codecName string, ssrc uint32, mtu int
 
 type h264StdinReader struct {
 	closed bool
+	buffer []byte
+	frameCount int
 }
 
 func (r *h264StdinReader) Read() (mediadevices.EncodedBuffer, func(), error) {
@@ -173,24 +177,76 @@ func (r *h264StdinReader) Read() (mediadevices.EncodedBuffer, func(), error) {
 		return mediadevices.EncodedBuffer{}, func() {}, io.EOF
 	}
 
-	buffer := make([]byte, 4096)
-	n, err := os.Stdin.Read(buffer)
+	// Read a larger chunk to get complete NAL units
+	chunk := make([]byte, 65536)
+	n, err := os.Stdin.Read(chunk)
 	if err != nil {
-		r.closed = true
+		if err == io.EOF {
+			log.Printf("H.264 stream ended (EOF)")
+			r.closed = true
+		} else {
+			log.Printf("Error reading H.264 stream: %v", err)
+		}
 		return mediadevices.EncodedBuffer{}, func() {}, err
 	}
 
 	if n == 0 {
+		log.Printf("H.264 stream ended (0 bytes)")
 		r.closed = true
 		return mediadevices.EncodedBuffer{}, func() {}, io.EOF
 	}
 
+	// Append to buffer
+	r.buffer = append(r.buffer, chunk[:n]...)
+
+	// Find NAL unit boundaries (0x00000001 or 0x000001)
+	nalStart := r.findNextNALUnit(0)
+	if nalStart == -1 {
+		// No complete NAL unit yet, keep reading
+		return r.Read()
+	}
+
+	nalEnd := r.findNextNALUnit(nalStart + 3)
+	if nalEnd == -1 {
+		// Only one NAL unit or incomplete, use all data
+		nalEnd = len(r.buffer)
+	}
+
+	nalData := make([]byte, nalEnd-nalStart)
+	copy(nalData, r.buffer[nalStart:nalEnd])
+	
+	// Remove processed data from buffer
+	r.buffer = r.buffer[nalEnd:]
+
+	r.frameCount++
+	if r.frameCount%30 == 1 { // Log every 30 frames (~1 second at 30fps)
+		log.Printf("H.264 frame %d: %d bytes (buffer: %d bytes)", r.frameCount, len(nalData), len(r.buffer))
+	}
+
 	encoded := mediadevices.EncodedBuffer{
-		Data:    buffer[:n],
-		Samples: 3000,
+		Data:    nalData,
+		Samples: 3000, // ~33ms at 90kHz for 30fps
 	}
 	
 	return encoded, func() {}, nil
+}
+
+func (r *h264StdinReader) findNextNALUnit(start int) int {
+	if len(r.buffer) < start+4 {
+		return -1
+	}
+	
+	for i := start; i < len(r.buffer)-3; i++ {
+		// Look for 0x00000001 start code
+		if r.buffer[i] == 0x00 && r.buffer[i+1] == 0x00 && r.buffer[i+2] == 0x00 && r.buffer[i+3] == 0x01 {
+			return i
+		}
+		// Look for 0x000001 start code  
+		if i < len(r.buffer)-2 && r.buffer[i] == 0x00 && r.buffer[i+1] == 0x00 && r.buffer[i+2] == 0x01 {
+			return i
+		}
+	}
+	return -1
 }
 
 func (r *h264StdinReader) Close() error {
