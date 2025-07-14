@@ -165,7 +165,10 @@ func (track *H264VideoTrack) NewRTPReader(codecName string, ssrc uint32, mtu int
 	
 	return &h264RTPReader{
 		packetizer: packetizer,
-		stdinReader: &h264StdinReader{framerate: track.framerate},
+		stdinReader: &h264StdinReader{
+			framerate: track.framerate,
+			sampler:   newVideoSampler(h264Codec.ClockRate),
+		},
 	}, nil
 }
 
@@ -175,6 +178,7 @@ type h264StdinReader struct {
 	frameCount int
 	lastFrameTime time.Time
 	framerate int
+	sampler samplerFunc
 }
 
 func (r *h264StdinReader) Read() (mediadevices.EncodedBuffer, func(), error) {
@@ -235,14 +239,12 @@ func (r *h264StdinReader) Read() (mediadevices.EncodedBuffer, func(), error) {
 		r.lastFrameTime = now
 	}
 
-	// Calculate proper timing: 90kHz / framerate = samples per frame
-	// For 15fps: 90000/15 = 6000 samples per frame (66.67ms)
-	// For 30fps: 90000/30 = 3000 samples per frame (33.33ms)
-	samplesPerFrame := uint32(90000 / r.framerate)
+	// Use dynamic timestamp calculation like the existing video track
+	samples := r.sampler()
 	
 	encoded := mediadevices.EncodedBuffer{
 		Data:    nalData,
-		Samples: samplesPerFrame,
+		Samples: samples,
 	}
 	
 	return encoded, func() {}, nil
