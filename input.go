@@ -690,15 +690,17 @@ func newVideoSampler(clockRate uint32) samplerFunc {
 func newFixedVideoSampler(clockRate uint32, framerate int) samplerFunc {
 	samplesPerFrame := uint32(clockRate) / uint32(framerate)
 	frameCount := 0
+	cumulativeTimestamp := uint32(0)
 	
 	log.Printf("Fixed video sampler: clockRate=%d, framerate=%d, samplesPerFrame=%d", clockRate, framerate, samplesPerFrame)
 	
 	return samplerFunc(func() uint32 {
 		frameCount++
+		cumulativeTimestamp += samplesPerFrame
 		if frameCount%30 == 1 {
-			log.Printf("Frame %d: returning %d samples (fixed timing)", frameCount, samplesPerFrame)
+			log.Printf("Frame %d: cumulative timestamp %d (increment %d)", frameCount, cumulativeTimestamp, samplesPerFrame)
 		}
-		return samplesPerFrame
+		return cumulativeTimestamp
 	})
 }
 
