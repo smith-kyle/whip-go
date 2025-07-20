@@ -116,7 +116,7 @@ func GetH264VideoTrackFromStdin(codecSelector *CodecSelector, framerate int) (me
 
 func newH264VideoTrackFromStdin(codecSelector *CodecSelector, framerate int) mediadevices.Track {
 	base := newBaseTrack(mediadevices.VideoInput, codecSelector)
-	
+
 	return &H264VideoTrack{
 		baseTrack: base,
 		framerate: framerate,
@@ -162,7 +162,7 @@ func (track *H264VideoTrack) NewRTPReader(codecName string, ssrc uint32, mtu int
 	}
 
 	packetizer := rtp.NewPacketizer(uint16(mtu), uint8(h264Codec.PayloadType), ssrc, h264Codec.Payloader, rtp.NewRandomSequencer(), h264Codec.ClockRate)
-	
+
 	return &h264RTPReader{
 		packetizer: packetizer,
 		stdinReader: &h264StdinReader{
@@ -173,12 +173,12 @@ func (track *H264VideoTrack) NewRTPReader(codecName string, ssrc uint32, mtu int
 }
 
 type h264StdinReader struct {
-	closed bool
-	buffer []byte
-	frameCount int
+	closed        bool
+	buffer        []byte
+	frameCount    int
 	lastFrameTime time.Time
-	framerate int
-	sampler samplerFunc
+	framerate     int
+	sampler       samplerFunc
 }
 
 func (r *h264StdinReader) Read() (mediadevices.EncodedBuffer, func(), error) {
@@ -223,7 +223,23 @@ func (r *h264StdinReader) Read() (mediadevices.EncodedBuffer, func(), error) {
 
 	nalData := make([]byte, nalEnd-nalStart)
 	copy(nalData, r.buffer[nalStart:nalEnd])
-	
+
+	// ADD THIS DEBUG CODE:
+	if len(nalData) < 50 { // Suspiciously small
+		log.Printf("WARNING: Very small NAL unit (%d bytes): %x", len(nalData), nalData)
+
+		// Calculate safe slice bounds for debugging
+		start := nalStart - 10
+		if start < 0 {
+			start = 0
+		}
+		end := nalEnd + 10
+		if end > len(r.buffer) {
+			end = len(r.buffer)
+		}
+		log.Printf("Buffer around this area: %x", r.buffer[start:end])
+	}
+
 	// Remove processed data from buffer
 	r.buffer = r.buffer[nalEnd:]
 
@@ -241,12 +257,12 @@ func (r *h264StdinReader) Read() (mediadevices.EncodedBuffer, func(), error) {
 
 	// Use dynamic timestamp calculation like the existing video track
 	samples := r.sampler()
-	
+
 	encoded := mediadevices.EncodedBuffer{
 		Data:    nalData,
 		Samples: samples,
 	}
-	
+
 	return encoded, func() {}, nil
 }
 
@@ -254,14 +270,17 @@ func (r *h264StdinReader) findNextNALUnit(start int) int {
 	if len(r.buffer) < start+4 {
 		return -1
 	}
-	
+
 	for i := start; i < len(r.buffer)-3; i++ {
-		// Look for 0x00000001 start code
+		// Prioritize 4-byte start code
 		if r.buffer[i] == 0x00 && r.buffer[i+1] == 0x00 && r.buffer[i+2] == 0x00 && r.buffer[i+3] == 0x01 {
 			return i
 		}
-		// Look for 0x000001 start code  
-		if i < len(r.buffer)-2 && r.buffer[i] == 0x00 && r.buffer[i+1] == 0x00 && r.buffer[i+2] == 0x01 {
+	}
+
+	// Only check 3-byte if no 4-byte found
+	for i := start; i < len(r.buffer)-2; i++ {
+		if r.buffer[i] == 0x00 && r.buffer[i+1] == 0x00 && r.buffer[i+2] == 0x01 {
 			return i
 		}
 	}
@@ -691,9 +710,9 @@ func newFixedVideoSampler(clockRate uint32, framerate int) samplerFunc {
 	samplesPerFrame := uint32(clockRate) / uint32(framerate)
 	frameCount := 0
 	cumulativeTimestamp := uint32(0)
-	
+
 	log.Printf("Fixed video sampler: clockRate=%d, framerate=%d, samplesPerFrame=%d", clockRate, framerate, samplesPerFrame)
-	
+
 	return samplerFunc(func() uint32 {
 		frameCount++
 		cumulativeTimestamp += samplesPerFrame
