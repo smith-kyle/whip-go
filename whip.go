@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/pion/mediadevices"
 	"github.com/pion/webrtc/v3"
@@ -110,7 +111,30 @@ func (whip *WHIPClient) Publish(stream mediadevices.MediaStream, mediaEngine web
 	defer resp.Body.Close()
 	body, err := io.ReadAll(resp.Body)
 
-	// log.Println(string(body))
+	// Print the full SDP response
+	log.Println("=== Server SDP Response ===")
+	log.Println(string(body))
+	log.Println("=== End SDP ===")
+
+	// Parse and highlight interesting parts
+	sdpLines := strings.Split(string(body), "\n")
+	log.Println("\n=== Parsed SDP Info ===")
+	for _, line := range sdpLines {
+		line = strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(line, "c=IN IP4"):
+			log.Printf("🌐 Connection Address: %s", line)
+		case strings.HasPrefix(line, "a=candidate:"):
+			log.Printf("🔗 ICE Candidate: %s", line)
+		case strings.HasPrefix(line, "m="):
+			log.Printf("📺 Media Line: %s", line)
+		case strings.HasPrefix(line, "a=rtpmap:"):
+			log.Printf("🎵 Codec Mapping: %s", line)
+		case strings.HasPrefix(line, "a=fmtp:"):
+			log.Printf("⚙️  Format Parameters: %s", line)
+		}
+	}
+	log.Println("=== End Parsed Info ===")
 
 	if resp.StatusCode != 201 {
 		log.Fatalf("Non Successful POST: %d", resp.StatusCode)
