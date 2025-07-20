@@ -224,21 +224,8 @@ func (r *h264StdinReader) Read() (mediadevices.EncodedBuffer, func(), error) {
 	nalData := make([]byte, nalEnd-nalStart)
 	copy(nalData, r.buffer[nalStart:nalEnd])
 
-	// ADD THIS DEBUG CODE:
-	if len(nalData) < 50 { // Suspiciously small
-		log.Printf("WARNING: Very small NAL unit (%d bytes): %x", len(nalData), nalData)
-
-		// Calculate safe slice bounds for debugging
-		start := nalStart - 10
-		if start < 0 {
-			start = 0
-		}
-		end := nalEnd + 10
-		if end > len(r.buffer) {
-			end = len(r.buffer)
-		}
-		log.Printf("Buffer around this area: %x", r.buffer[start:end])
-	}
+	// Log size of every NAL unit
+	log.Printf("NAL unit size: %d bytes", len(nalData))
 
 	// Remove processed data from buffer
 	r.buffer = r.buffer[nalEnd:]
