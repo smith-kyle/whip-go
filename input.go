@@ -208,6 +208,12 @@ func (r *h264StdinReader) Read() (mediadevices.EncodedBuffer, func(), error) {
 	// Append to buffer
 	r.buffer = append(r.buffer, chunk[:n]...)
 
+	// VERIFICATION: Count NAL units in the newly read data
+	nalCount := r.countNALUnitsInRange(len(r.buffer)-n, len(r.buffer))
+	if nalCount > 0 {
+		log.Printf("STDIN READ: %d bytes, found %d NAL units in this read", n, nalCount)
+	}
+
 	// Find NAL unit boundaries (0x00000001 or 0x000001)
 	nalStart := r.findNextNALUnit(0)
 	if nalStart == -1 {
@@ -229,6 +235,13 @@ func (r *h264StdinReader) Read() (mediadevices.EncodedBuffer, func(), error) {
 
 	// Remove processed data from buffer
 	r.buffer = r.buffer[nalEnd:]
+
+	// Right after: r.buffer = r.buffer[nalEnd:]
+	remainingNALs := strings.Count(string(r.buffer), "\x00\x00\x00\x01") +
+		strings.Count(string(r.buffer), "\x00\x00\x01")
+	if remainingNALs > 0 {
+		log.Printf("After processing 1 NAL unit, %d NAL units remain in buffer", remainingNALs)
+	}
 
 	r.frameCount++
 	now := time.Now()
@@ -272,6 +285,31 @@ func (r *h264StdinReader) findNextNALUnit(start int) int {
 		}
 	}
 	return -1
+}
+
+func (r *h264StdinReader) countNALUnitsInRange(start, end int) int {
+	count := 0
+	pos := start
+
+	for pos < end-3 {
+		// Check for 4-byte start code
+		if pos <= end-4 && r.buffer[pos] == 0x00 && r.buffer[pos+1] == 0x00 &&
+			r.buffer[pos+2] == 0x00 && r.buffer[pos+3] == 0x01 {
+			count++
+			pos += 4
+			continue
+		}
+		// Check for 3-byte start code
+		if pos <= end-3 && r.buffer[pos] == 0x00 && r.buffer[pos+1] == 0x00 &&
+			r.buffer[pos+2] == 0x01 {
+			count++
+			pos += 3
+			continue
+		}
+		pos++
+	}
+
+	return count
 }
 
 func (r *h264StdinReader) Close() error {
