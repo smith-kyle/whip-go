@@ -237,8 +237,7 @@ func (r *h264StdinReader) Read() (mediadevices.EncodedBuffer, func(), error) {
 	r.buffer = r.buffer[nalEnd:]
 
 	// Right after: r.buffer = r.buffer[nalEnd:]
-	remainingNALs := strings.Count(string(r.buffer), "\x00\x00\x00\x01") +
-		strings.Count(string(r.buffer), "\x00\x00\x01")
+	remainingNALs := r.countNALUnitsInRange(0, len(r.buffer))
 	if remainingNALs > 0 {
 		log.Printf("After processing 1 NAL unit, %d NAL units remain in buffer", remainingNALs)
 	}
