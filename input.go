@@ -175,6 +175,7 @@ func (track *H264VideoTrack) NewRTPReader(codecName string, ssrc uint32, mtu int
 type h264StdinReader struct {
 	closed        bool
 	buffer        []byte
+	nalQueue      [][]byte
 	frameCount    int
 	lastFrameTime time.Time
 	framerate     int
@@ -186,85 +187,30 @@ func (r *h264StdinReader) Read() (mediadevices.EncodedBuffer, func(), error) {
 		return mediadevices.EncodedBuffer{}, func() {}, io.EOF
 	}
 
-	// Read a larger chunk to get complete NAL units
-	chunk := make([]byte, 65536)
-	n, err := os.Stdin.Read(chunk)
+	// If we have queued NAL units, return the next one
+	if len(r.nalQueue) > 0 {
+		nalData := r.nalQueue[0]
+		r.nalQueue = r.nalQueue[1:]
+		encoded := r.createEncodedBuffer(nalData)
+		return encoded, func() {}, nil
+	}
+
+	// Queue is empty, fill it by reading from stdin
+	err := r.fillNALQueue()
 	if err != nil {
-		if err == io.EOF {
-			log.Printf("H.264 stream ended (EOF)")
-			r.closed = true
-		} else {
-			log.Printf("Error reading H.264 stream: %v", err)
-		}
 		return mediadevices.EncodedBuffer{}, func() {}, err
 	}
 
-	if n == 0 {
-		log.Printf("H.264 stream ended (0 bytes)")
-		r.closed = true
-		return mediadevices.EncodedBuffer{}, func() {}, io.EOF
+	// If we still have no NAL units after reading, recurse to try again
+	if len(r.nalQueue) == 0 {
+		return r.Read()
 	}
 
-	// Append to buffer
-	r.buffer = append(r.buffer, chunk[:n]...)
-
-	// VERIFICATION: Count NAL units in the newly read data
-	nalCount := r.countNALUnitsInRange(len(r.buffer)-n, len(r.buffer))
-	if nalCount > 0 {
-		log.Printf("STDIN READ: %d bytes, found %d NAL units in this read", n, nalCount)
-	}
-
-	for {
-		// Find NAL unit boundaries
-		nalStart := r.findNextNALUnit(0)
-		if nalStart == -1 {
-			// No complete NAL unit yet, need more data
-			return r.Read() // Only recurse when buffer is truly empty
-		}
-
-		nalEnd := r.findNextNALUnit(nalStart + 4)
-		if nalEnd == -1 {
-			nalEnd = len(r.buffer)
-		}
-
-		nalData := make([]byte, nalEnd-nalStart)
-		copy(nalData, r.buffer[nalStart:nalEnd])
-
-		// Remove this NAL unit from buffer
-		r.buffer = r.buffer[nalEnd:]
-
-		// Check if this is an AUD (type 9)
-		if len(nalData) >= 5 {
-			nalType := nalData[4] & 0x1F
-			if nalType == 9 {
-				continue
-			}
-		}
-
-		totalNalCount := r.countNALUnitsInRange(0, len(r.buffer))
-		log.Printf("Total NAL units in buffer after processing: %d", totalNalCount)
-
-		r.frameCount++
-		now := time.Now()
-		if r.frameCount%30 == 1 { // Log every 30 frames (~1 second at 30fps)
-			fps := 0.0
-			if r.frameCount > 1 && !r.lastFrameTime.IsZero() {
-				elapsed := now.Sub(r.lastFrameTime)
-				fps = 29.0 / elapsed.Seconds() // 29 frames processed in elapsed time
-			}
-			log.Printf("H.264 frame %d: %d bytes (buffer: %d bytes) - FPS: %.1f", r.frameCount, len(nalData), len(r.buffer), fps)
-			r.lastFrameTime = now
-		}
-
-		// Use dynamic timestamp calculation like the existing video track
-		samples := r.sampler()
-
-		encoded := mediadevices.EncodedBuffer{
-			Data:    nalData,
-			Samples: samples,
-		}
-		return encoded, func() {}, nil
-	}
+	// Return first NAL unit from queue
+	nalData := r.nalQueue[0]
+	r.nalQueue = r.nalQueue[1:]
+	encoded := r.createEncodedBuffer(nalData)
+	return encoded, func() {}, nil
 }
 
 func (r *h264StdinReader) findNextNALUnit(start int) int {
@@ -311,6 +257,100 @@ func (r *h264StdinReader) countNALUnitsInRange(start, end int) int {
 	}
 
 	return count
+}
+
+func (r *h264StdinReader) fillNALQueue() error {
+	// Read a larger chunk to get complete NAL units
+	chunk := make([]byte, 65536)
+	n, err := os.Stdin.Read(chunk)
+	if err != nil {
+		if err == io.EOF {
+			log.Printf("H.264 stream ended (EOF)")
+			r.closed = true
+		} else {
+			log.Printf("Error reading H.264 stream: %v", err)
+		}
+		return err
+	}
+
+	if n == 0 {
+		log.Printf("H.264 stream ended (0 bytes)")
+		r.closed = true
+		return io.EOF
+	}
+
+	// Append to buffer
+	r.buffer = append(r.buffer, chunk[:n]...)
+
+	// VERIFICATION: Count NAL units in the newly read data
+	nalCount := r.countNALUnitsInRange(len(r.buffer)-n, len(r.buffer))
+	if nalCount > 0 {
+		log.Printf("STDIN READ: %d bytes, found %d NAL units in this read", n, nalCount)
+	}
+
+	// Process all complete NAL units in buffer
+	queuedCount := 0
+	for {
+		// Find NAL unit boundaries
+		nalStart := r.findNextNALUnit(0)
+		if nalStart == -1 {
+			// No complete NAL unit yet, break and keep buffer for next read
+			break
+		}
+
+		nalEnd := r.findNextNALUnit(nalStart + 4)
+		if nalEnd == -1 {
+			nalEnd = len(r.buffer)
+		}
+
+		nalData := make([]byte, nalEnd-nalStart)
+		copy(nalData, r.buffer[nalStart:nalEnd])
+
+		// Remove this NAL unit from buffer
+		r.buffer = r.buffer[nalEnd:]
+
+		// Check if this is an AUD (type 9) and skip it
+		if len(nalData) >= 5 {
+			nalType := nalData[4] & 0x1F
+			if nalType == 9 {
+				continue // Skip AUD, don't add to queue
+			}
+		}
+
+		// Add non-AUD NAL unit to queue
+		r.nalQueue = append(r.nalQueue, nalData)
+		queuedCount++
+	}
+
+	if queuedCount > 0 {
+		totalNalCount := r.countNALUnitsInRange(0, len(r.buffer))
+		log.Printf("QUEUE UPDATE: %d NAL units added to queue, %d remaining in buffer", queuedCount, totalNalCount)
+	}
+
+	return nil
+}
+
+func (r *h264StdinReader) createEncodedBuffer(nalData []byte) mediadevices.EncodedBuffer {
+	r.frameCount++
+	now := time.Now()
+	if r.frameCount%30 == 1 { // Log every 30 frames (~1 second at 30fps)
+		fps := 0.0
+		if r.frameCount > 1 && !r.lastFrameTime.IsZero() {
+			elapsed := now.Sub(r.lastFrameTime)
+			fps = 29.0 / elapsed.Seconds() // 29 frames processed in elapsed time
+		}
+		log.Printf("H.264 frame %d: %d bytes (buffer: %d bytes, queue: %d) - FPS: %.1f", 
+			r.frameCount, len(nalData), len(r.buffer), len(r.nalQueue), fps)
+		r.lastFrameTime = now
+	}
+
+	// Use dynamic timestamp calculation like the existing video track
+	samples := r.sampler()
+
+	return mediadevices.EncodedBuffer{
+		Data:    nalData,
+		Samples: samples,
+	}
 }
 
 func (r *h264StdinReader) Close() error {
