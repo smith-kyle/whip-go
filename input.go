@@ -237,13 +237,12 @@ func (r *h264StdinReader) Read() (mediadevices.EncodedBuffer, func(), error) {
 		if len(nalData) >= 5 {
 			nalType := nalData[4] & 0x1F
 			if nalType == 9 {
-				log.Printf("Skipping AUD NAL unit (type %d)", nalType)
-				continue // Skip this NAL unit, process next one from buffer
+				continue
 			}
 		}
 
-		// This is not an AUD, process it
-		log.Printf("Processing NAL unit type %d, size: %d bytes", nalData[4]&0x1F, len(nalData))
+		totalNalCount := r.countNALUnitsInRange(0, len(r.buffer))
+		log.Printf("Total NAL units in buffer after processing: %d", totalNalCount)
 
 		r.frameCount++
 		now := time.Now()
