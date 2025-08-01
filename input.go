@@ -282,12 +282,6 @@ func (r *h264StdinReader) fillNALQueue() error {
 	// Append to buffer
 	r.buffer = append(r.buffer, chunk[:n]...)
 
-	// VERIFICATION: Count NAL units in the newly read data
-	nalCount := r.countNALUnitsInRange(len(r.buffer)-n, len(r.buffer))
-	if nalCount > 0 {
-		log.Printf("STDIN READ: %d bytes, found %d NAL units in this read", n, nalCount)
-	}
-
 	// Process all complete NAL units in buffer
 	queuedCount := 0
 	for {
@@ -322,11 +316,6 @@ func (r *h264StdinReader) fillNALQueue() error {
 		queuedCount++
 	}
 
-	if queuedCount > 0 {
-		totalNalCount := r.countNALUnitsInRange(0, len(r.buffer))
-		log.Printf("QUEUE UPDATE: %d NAL units added to queue, %d remaining in buffer", queuedCount, totalNalCount)
-	}
-
 	return nil
 }
 
@@ -339,7 +328,7 @@ func (r *h264StdinReader) createEncodedBuffer(nalData []byte) mediadevices.Encod
 			elapsed := now.Sub(r.lastFrameTime)
 			fps = 29.0 / elapsed.Seconds() // 29 frames processed in elapsed time
 		}
-		log.Printf("H.264 frame %d: %d bytes (buffer: %d bytes, queue: %d) - FPS: %.1f", 
+		log.Printf("H.264 frame %d: %d bytes (buffer: %d bytes, queue: %d) - FPS: %.1f",
 			r.frameCount, len(nalData), len(r.buffer), len(r.nalQueue), fps)
 		r.lastFrameTime = now
 	}
@@ -782,9 +771,6 @@ func newFixedVideoSampler(clockRate uint32, framerate int) samplerFunc {
 	return samplerFunc(func() uint32 {
 		frameCount++
 		cumulativeTimestamp += samplesPerFrame
-		if frameCount%30 == 1 {
-			log.Printf("Frame %d: cumulative timestamp %d (increment %d)", frameCount, cumulativeTimestamp, samplesPerFrame)
-		}
 		return cumulativeTimestamp
 	})
 }
