@@ -320,20 +320,6 @@ func (r *h264StdinReader) fillNALQueue() error {
 }
 
 func (r *h264StdinReader) createEncodedBuffer(nalData []byte) mediadevices.EncodedBuffer {
-	r.frameCount++
-	now := time.Now()
-	if r.frameCount%30 == 1 { // Log every 30 frames (~1 second at 30fps)
-		fps := 0.0
-		if r.frameCount > 1 && !r.lastFrameTime.IsZero() {
-			elapsed := now.Sub(r.lastFrameTime)
-			fps = 29.0 / elapsed.Seconds() // 29 frames processed in elapsed time
-		}
-		log.Printf("H.264 frame %d: %d bytes (buffer: %d bytes, queue: %d) - FPS: %.1f",
-			r.frameCount, len(nalData), len(r.buffer), len(r.nalQueue), fps)
-		r.lastFrameTime = now
-	}
-
-	// Use dynamic timestamp calculation like the existing video track
 	samples := r.sampler()
 
 	return mediadevices.EncodedBuffer{
